@@ -68,19 +68,58 @@ class OpenWindbgRemote(BaseModel):
     include_threads: bool = Field(default=False, description="Whether to include thread information")
 
 
+class AttachWindbgProcessParams(BaseModel):
+    """Parameters for attaching to a local process."""
+    pid: Optional[int] = Field(default=None, description="Process ID (PID) of the local process to attach to")
+    process_name: Optional[str] = Field(default=None, description="Name of the local process to attach to (e.g., 'notepad.exe'). Use pid when possible for unambiguous targeting.")
+    include_stack_trace: bool = Field(default=False, description="Whether to include the current stack trace after attaching")
+    include_modules: bool = Field(default=False, description="Whether to include loaded module information")
+    include_threads: bool = Field(default=False, description="Whether to include thread information")
+
+    @model_validator(mode='after')
+    def validate_attach_params(self):
+        if self.pid is None and not self.process_name:
+            raise ValueError("Either pid or process_name must be provided")
+        if self.pid is not None and self.process_name:
+            raise ValueError("pid and process_name are mutually exclusive")
+        return self
+
+
+class CloseWindbgProcessParams(BaseModel):
+    """Parameters for detaching from a local process."""
+    pid: Optional[int] = Field(default=None, description="Process ID (PID) that was attached")
+    process_name: Optional[str] = Field(default=None, description="Process name that was attached")
+
+    @model_validator(mode='after')
+    def validate_params(self):
+        if self.pid is None and not self.process_name:
+            raise ValueError("Either pid or process_name must be provided")
+        if self.pid is not None and self.process_name:
+            raise ValueError("pid and process_name are mutually exclusive")
+        return self
+
+
+class ListLocalProcessesParams(BaseModel):
+    """Parameters for listing local processes."""
+    name_filter: Optional[str] = Field(default=None, description="Optional substring filter on process name (case-insensitive)")
+
+
 class RunWindbgCmdParams(BaseModel):
     """Parameters for executing a WinDbg command."""
     dump_path: Optional[str] = Field(default=None, description="Path to the Windows crash dump file")
     connection_string: Optional[str] = Field(default=None, description="Remote connection string (e.g., 'tcp:Port=5005,Server=192.168.0.100')")
+    pid: Optional[int] = Field(default=None, description="PID of the attached local process")
+    process_name: Optional[str] = Field(default=None, description="Name of the attached local process")
     command: str = Field(description="WinDbg command to execute")
 
     @model_validator(mode='after')
     def validate_connection_params(self):
-        """Validate that exactly one of dump_path or connection_string is provided."""
-        if not self.dump_path and not self.connection_string:
-            raise ValueError("Either dump_path or connection_string must be provided")
-        if self.dump_path and self.connection_string:
-            raise ValueError("dump_path and connection_string are mutually exclusive")
+        """Validate that exactly one session identifier is provided."""
+        provided = sum([bool(self.dump_path), bool(self.connection_string), self.pid is not None, bool(self.process_name)])
+        if provided == 0:
+            raise ValueError("One of dump_path, connection_string, pid, or process_name must be provided")
+        if provided > 1:
+            raise ValueError("dump_path, connection_string, pid, and process_name are mutually exclusive")
         return self
 
 
@@ -110,41 +149,53 @@ class SendCtrlBreakParams(BaseModel):
     """Parameters for sending CTRL+BREAK to a CDB/WinDbg session."""
     dump_path: Optional[str] = Field(default=None, description="Path to the Windows crash dump file")
     connection_string: Optional[str] = Field(default=None, description="Remote connection string (e.g., 'tcp:Port=5005,Server=192.168.0.100')")
+    pid: Optional[int] = Field(default=None, description="PID of the attached local process")
+    process_name: Optional[str] = Field(default=None, description="Name of the attached local process")
 
     @model_validator(mode='after')
     def validate_connection_params(self):
-        if not self.dump_path and not self.connection_string:
-            raise ValueError("Either dump_path or connection_string must be provided")
-        if self.dump_path and self.connection_string:
-            raise ValueError("dump_path and connection_string are mutually exclusive")
+        provided = sum([bool(self.dump_path), bool(self.connection_string), self.pid is not None, bool(self.process_name)])
+        if provided == 0:
+            raise ValueError("One of dump_path, connection_string, pid, or process_name must be provided")
+        if provided > 1:
+            raise ValueError("dump_path, connection_string, pid, and process_name are mutually exclusive")
         return self
 
 
 def get_or_create_session(
     dump_path: Optional[str] = None,
     connection_string: Optional[str] = None,
+    pid: Optional[int] = None,
+    process_name: Optional[str] = None,
     cdb_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False
 ) -> CDBSession:
     """Get an existing CDB session or create a new one."""
-    if not dump_path and not connection_string:
-        raise ValueError("Either dump_path or connection_string must be provided")
-    if dump_path and connection_string:
-        raise ValueError("dump_path and connection_string are mutually exclusive")
+    provided = sum([bool(dump_path), bool(connection_string), pid is not None, bool(process_name)])
+    if provided == 0:
+        raise ValueError("One of dump_path, connection_string, pid, or process_name must be provided")
+    if provided > 1:
+        raise ValueError("dump_path, connection_string, pid, and process_name are mutually exclusive")
 
     # Create session identifier
     if dump_path:
         session_id = os.path.abspath(dump_path)
-    else:
+    elif connection_string:
         session_id = f"remote:{connection_string}"
+    elif pid is not None:
+        session_id = f"pid:{pid}"
+    else:
+        session_id = f"process:{process_name}"
 
     if session_id not in active_sessions or active_sessions[session_id] is None:
         try:
             session = CDBSession(
                 dump_path=dump_path,
                 remote_connection=connection_string,
+                attach_process_id=pid,
+                attach_process_name=process_name,
                 cdb_path=cdb_path,
                 symbols_path=symbols_path,
                 timeout=timeout,
@@ -161,18 +212,26 @@ def get_or_create_session(
     return active_sessions[session_id]
 
 
-def unload_session(dump_path: Optional[str] = None, connection_string: Optional[str] = None) -> bool:
+def unload_session(
+    dump_path: Optional[str] = None,
+    connection_string: Optional[str] = None,
+    pid: Optional[int] = None,
+    process_name: Optional[str] = None,
+) -> bool:
     """Unload and clean up a CDB session."""
-    if not dump_path and not connection_string:
-        return False
-    if dump_path and connection_string:
+    provided = sum([bool(dump_path), bool(connection_string), pid is not None, bool(process_name)])
+    if provided != 1:
         return False
 
     # Create session identifier
     if dump_path:
         session_id = os.path.abspath(dump_path)
-    else:
+    elif connection_string:
         session_id = f"remote:{connection_string}"
+    elif pid is not None:
+        session_id = f"pid:{pid}"
+    else:
+        session_id = f"process:{process_name}"
 
     if session_id in active_sessions and active_sessions[session_id] is not None:
         try:
@@ -360,7 +419,33 @@ def _create_server(
                 This tool helps you discover available crash dumps that can be analyzed.
                 """,
                 inputSchema=ListWindbgDumpsParams.model_json_schema(),
-            )
+            ),
+            Tool(
+                name="attach_windbg_process",
+                description="""
+                Attach to a running local Windows process using WinDbg/CDB.
+                You can specify either the process PID or the process name.
+                After attaching, the target process is paused and can be inspected or resumed.
+                Use 'list_local_processes' first to discover available processes and their PIDs.
+                """,
+                inputSchema=AttachWindbgProcessParams.model_json_schema(),
+            ),
+            Tool(
+                name="close_windbg_process",
+                description="""
+                Detach WinDbg/CDB from a previously attached local process and resume it.
+                Use this tool when you are done debugging the process.
+                """,
+                inputSchema=CloseWindbgProcessParams.model_json_schema(),
+            ),
+            Tool(
+                name="list_local_processes",
+                description="""
+                List running local Windows processes with their PIDs and names.
+                Use this tool to discover candidate processes before attaching with 'attach_windbg_process'.
+                """,
+                inputSchema=ListLocalProcessesParams.model_json_schema(),
+            ),
         ]
 
     @server.call_tool()
@@ -465,6 +550,7 @@ def _create_server(
                 args = RunWindbgCmdParams(**arguments)
                 session = get_or_create_session(
                     dump_path=args.dump_path, connection_string=args.connection_string,
+                    pid=args.pid, process_name=args.process_name,
                     cdb_path=cdb_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
                 )
                 output = session.send_command(args.command)
@@ -478,10 +564,18 @@ def _create_server(
                 args = SendCtrlBreakParams(**arguments)
                 session = get_or_create_session(
                     dump_path=args.dump_path, connection_string=args.connection_string,
+                    pid=args.pid, process_name=args.process_name,
                     cdb_path=cdb_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
                 )
                 session.send_ctrl_break()
-                target = args.dump_path if args.dump_path else f"remote: {args.connection_string}"
+                if args.dump_path:
+                    target = args.dump_path
+                elif args.connection_string:
+                    target = f"remote: {args.connection_string}"
+                elif args.pid is not None:
+                    target = f"pid: {args.pid}"
+                else:
+                    target = f"process: {args.process_name}"
                 return [TextContent(
                     type="text",
                     text=f"Sent CTRL+BREAK to CDB session ({target})."
@@ -562,6 +656,90 @@ def _create_server(
                     type="text",
                     text=result_text
                 )]
+
+            elif name == "attach_windbg_process":
+                args = AttachWindbgProcessParams(**arguments)
+                session = get_or_create_session(
+                    pid=args.pid, process_name=args.process_name,
+                    cdb_path=cdb_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
+                )
+
+                results = []
+
+                # Get target process information
+                target_info = session.send_command("!peb")
+                results.append("### Target Process Information\n```\n" + "\n".join(target_info) + "\n```\n\n")
+
+                # Get current registers
+                reg_info = session.send_command("r")
+                results.append("### Current Registers\n```\n" + "\n".join(reg_info) + "\n```\n\n")
+
+                if args.include_stack_trace:
+                    stack = session.send_command("kb")
+                    results.append("### Stack Trace\n```\n" + "\n".join(stack) + "\n```\n\n")
+
+                if args.include_modules:
+                    modules = session.send_command("lm")
+                    results.append("### Loaded Modules\n```\n" + "\n".join(modules) + "\n```\n\n")
+
+                if args.include_threads:
+                    threads = session.send_command("~")
+                    results.append("### Threads\n```\n" + "\n".join(threads) + "\n```\n\n")
+
+                target_label = f"PID {args.pid}" if args.pid is not None else args.process_name
+                return [TextContent(
+                    type="text",
+                    text=f"Successfully attached to process ({target_label}).\n\n" + "".join(results)
+                )]
+
+            elif name == "close_windbg_process":
+                args = CloseWindbgProcessParams(**arguments)
+                success = unload_session(pid=args.pid, process_name=args.process_name)
+                target_label = f"PID {args.pid}" if args.pid is not None else args.process_name
+                if success:
+                    return [TextContent(
+                        type="text",
+                        text=f"Successfully detached from process ({target_label}) and resumed it."
+                    )]
+                else:
+                    return [TextContent(
+                        type="text",
+                        text=f"No active session found for process ({target_label})."
+                    )]
+
+            elif name == "list_local_processes":
+                args = ListLocalProcessesParams(**arguments)
+                import subprocess as _sp
+                proc = _sp.run(
+                    ["tasklist", "/fo", "csv", "/nh"],
+                    capture_output=True, text=True
+                )
+                lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+                # Each CSV line: "Image Name","PID","Session Name","Session#","Mem Usage"
+                processes = []
+                for line in lines:
+                    parts = [p.strip('"') for p in line.split('","')]
+                    if len(parts) >= 2:
+                        name_col = parts[0]
+                        pid_col = parts[1]
+                        if args.name_filter and args.name_filter.lower() not in name_col.lower():
+                            continue
+                        processes.append((name_col, pid_col))
+
+                if not processes:
+                    filter_note = f" matching '{args.name_filter}'" if args.name_filter else ""
+                    return [TextContent(
+                        type="text",
+                        text=f"No running processes found{filter_note}."
+                    )]
+
+                result_text = f"Found {len(processes)} running process(es):\n\n"
+                result_text += f"{'PID':<8} {'Name'}\n"
+                result_text += "-" * 50 + "\n"
+                for proc_name, proc_pid in processes:
+                    result_text += f"{proc_pid:<8} {proc_name}\n"
+
+                return [TextContent(type="text", text=result_text)]
 
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,

@@ -36,6 +36,8 @@ class CDBSession:
         self,
         dump_path: Optional[str] = None,
         remote_connection: Optional[str] = None,
+        attach_process_id: Optional[int] = None,
+        attach_process_name: Optional[str] = None,
         cdb_path: Optional[str] = None,
         symbols_path: Optional[str] = None,
         initial_commands: Optional[List[str]] = None,
@@ -47,8 +49,10 @@ class CDBSession:
         Initialize a new CDB debugging session.
 
         Args:
-            dump_path: Path to the crash dump file (mutually exclusive with remote_connection)
+            dump_path: Path to the crash dump file
             remote_connection: Remote debugging connection string (e.g., "tcp:Port=5005,Server=192.168.0.100")
+            attach_process_id: PID of the local process to attach to
+            attach_process_name: Name of the local process to attach to (e.g., "notepad.exe")
             cdb_path: Custom path to cdb.exe. If None, will try to find it automatically
             symbols_path: Custom symbols path. If None, uses default Windows symbols
             initial_commands: List of commands to run when CDB starts
@@ -61,17 +65,25 @@ class CDBSession:
             FileNotFoundError: If the dump file cannot be found
             ValueError: If invalid parameters are provided
         """
-        # Validate that exactly one of dump_path or remote_connection is provided
-        if not dump_path and not remote_connection:
-            raise ValueError("Either dump_path or remote_connection must be provided")
-        if dump_path and remote_connection:
-            raise ValueError("dump_path and remote_connection are mutually exclusive")
+        # Validate that exactly one session type is provided
+        provided = sum([
+            bool(dump_path),
+            bool(remote_connection),
+            attach_process_id is not None,
+            bool(attach_process_name),
+        ])
+        if provided == 0:
+            raise ValueError("One of dump_path, remote_connection, attach_process_id, or attach_process_name must be provided")
+        if provided > 1:
+            raise ValueError("dump_path, remote_connection, attach_process_id, and attach_process_name are mutually exclusive")
 
         if dump_path and not os.path.isfile(dump_path):
             raise FileNotFoundError(f"Dump file not found: {dump_path}")
 
         self.dump_path = dump_path
         self.remote_connection = remote_connection
+        self.attach_process_id = attach_process_id
+        self.attach_process_name = attach_process_name
         self.timeout = timeout
         self.verbose = verbose
 
@@ -88,6 +100,10 @@ class CDBSession:
             cmd_args.extend(["-z", self.dump_path])
         elif self.remote_connection:
             cmd_args.extend(["-remote", self.remote_connection])
+        elif self.attach_process_id is not None:
+            cmd_args.extend(["-p", str(self.attach_process_id)])
+        elif self.attach_process_name:
+            cmd_args.extend(["-pn", self.attach_process_name])
 
         # Add symbols path if provided
         if symbols_path:
@@ -98,9 +114,9 @@ class CDBSession:
             cmd_args.extend(additional_args)
 
         try:
-            # Only create a new process group for remote sessions where CTRL+BREAK is needed
+            # Create a new process group for sessions where CTRL+BREAK is needed
             creationflags = 0
-            if os.name == 'nt' and self.remote_connection:
+            if os.name == 'nt' and (self.remote_connection or self.attach_process_id is not None or self.attach_process_name):
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
 
             self.process = subprocess.Popen(
@@ -229,6 +245,10 @@ class CDBSession:
                         # For remote connections, send CTRL+B to detach
                         self.process.stdin.write("\x02")  # CTRL+B
                         self.process.stdin.flush()
+                    elif self.attach_process_id is not None or self.attach_process_name:
+                        # For local process attach, detach gracefully then quit
+                        self.process.stdin.write(".detach\nq\n")
+                        self.process.stdin.flush()
                     else:
                         # For dump files, send 'q' to quit
                         self.process.stdin.write("q\n")
@@ -267,6 +287,10 @@ class CDBSession:
             return os.path.abspath(self.dump_path)
         elif self.remote_connection:
             return f"remote:{self.remote_connection}"
+        elif self.attach_process_id is not None:
+            return f"pid:{self.attach_process_id}"
+        elif self.attach_process_name:
+            return f"process:{self.attach_process_name}"
         else:
             raise CDBError("Session has no valid identifier")
 
