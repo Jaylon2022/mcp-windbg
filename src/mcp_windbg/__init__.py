@@ -8,7 +8,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Give a model the ability to analyze Windows crash dumps with WinDbg/CDB"
     )
-    parser.add_argument("--cdb-path", type=str, help="Custom path to cdb.exe")
+    parser.add_argument("--cdb-path", type=str, help="Custom path to cdb.exe (user-mode debugger)")
+    parser.add_argument("--kd-path", type=str, help="Custom path to kd.exe (kernel-mode debugger, used for kernel debugging sessions)")
     parser.add_argument("--symbols-path", type=str, help="Custom symbols path")
     parser.add_argument("--timeout", type=int, default=30, help="Command timeout in seconds")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
@@ -29,6 +30,7 @@ def main():
     if args.transport == "stdio":
         asyncio.run(serve(
             cdb_path=args.cdb_path,
+            kd_path=args.kd_path,
             symbols_path=args.symbols_path,
             timeout=args.timeout,
             verbose=args.verbose
@@ -38,6 +40,7 @@ def main():
             host=args.host,
             port=args.port,
             cdb_path=args.cdb_path,
+            kd_path=args.kd_path,
             symbols_path=args.symbols_path,
             timeout=args.timeout,
             verbose=args.verbose

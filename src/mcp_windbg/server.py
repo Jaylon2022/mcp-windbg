@@ -104,22 +104,46 @@ class ListLocalProcessesParams(BaseModel):
     name_filter: Optional[str] = Field(default=None, description="Optional substring filter on process name (case-insensitive)")
 
 
+class OpenWindbgKernelParams(BaseModel):
+    """Parameters for connecting to a kernel debugging session."""
+    kernel_connection: str = Field(
+        description=(
+            "Kernel debugging transport string. Examples:\n"
+            "  KDNET (network):      net:port=50000,key=1.2.3.4\n"
+            "  Serial:               com:port=COM1,baud=115200\n"
+            "  Named pipe (VM):      com:pipe,port=\\\\\\.\\\\pipe\\\\com_1\n"
+            "  USB 3.0:              usb3:targetname=MyTarget\n"
+            "  IEEE 1394:            1394:channel=0"
+        )
+    )
+    include_stack_trace: bool = Field(default=False, description="Whether to collect a kernel stack trace after connecting (requires the target to be at a break)")
+    include_modules: bool = Field(default=False, description="Whether to collect loaded module information (requires the target to be at a break)")
+
+
+class CloseWindbgKernelParams(BaseModel):
+    """Parameters for disconnecting a kernel debugging session."""
+    kernel_connection: str = Field(description="The kernel transport string used when opening the session")
+
+
 class RunWindbgCmdParams(BaseModel):
     """Parameters for executing a WinDbg command."""
     dump_path: Optional[str] = Field(default=None, description="Path to the Windows crash dump file")
     connection_string: Optional[str] = Field(default=None, description="Remote connection string (e.g., 'tcp:Port=5005,Server=192.168.0.100')")
     pid: Optional[int] = Field(default=None, description="PID of the attached local process")
     process_name: Optional[str] = Field(default=None, description="Name of the attached local process")
+    kernel_connection: Optional[str] = Field(default=None, description="Kernel debugging transport string (e.g., 'net:port=50000,key=1.2.3.4')")
     command: str = Field(description="WinDbg command to execute")
+    no_wait: bool = Field(default=False, description="If True, send the command and return immediately without waiting for output. Use for commands that resume target execution such as 'g', 'gh', 'gn', 'gc'.")
 
     @model_validator(mode='after')
     def validate_connection_params(self):
         """Validate that exactly one session identifier is provided."""
-        provided = sum([bool(self.dump_path), bool(self.connection_string), self.pid is not None, bool(self.process_name)])
+        provided = sum([bool(self.dump_path), bool(self.connection_string), self.pid is not None,
+                        bool(self.process_name), bool(self.kernel_connection)])
         if provided == 0:
-            raise ValueError("One of dump_path, connection_string, pid, or process_name must be provided")
+            raise ValueError("One of dump_path, connection_string, pid, process_name, or kernel_connection must be provided")
         if provided > 1:
-            raise ValueError("dump_path, connection_string, pid, and process_name are mutually exclusive")
+            raise ValueError("dump_path, connection_string, pid, process_name, and kernel_connection are mutually exclusive")
         return self
 
 
@@ -145,20 +169,43 @@ class ListWindbgDumpsParams(BaseModel):
     )
 
 
+class GetSessionLogParams(BaseModel):
+    """Parameters for retrieving raw debugger output from an active session."""
+    kernel_connection: Optional[str] = Field(default=None, description="Kernel debugging transport string")
+    dump_path: Optional[str] = Field(default=None, description="Path to the Windows crash dump file")
+    connection_string: Optional[str] = Field(default=None, description="Remote connection string")
+    pid: Optional[int] = Field(default=None, description="PID of the attached local process")
+    process_name: Optional[str] = Field(default=None, description="Name of the attached local process")
+    max_lines: int = Field(default=200, description="Maximum number of recent output lines to return (default 200)")
+
+    @model_validator(mode='after')
+    def validate_params(self):
+        provided = sum([bool(self.kernel_connection), bool(self.dump_path),
+                        bool(self.connection_string), self.pid is not None,
+                        bool(self.process_name)])
+        if provided == 0:
+            raise ValueError("One session identifier must be provided")
+        if provided > 1:
+            raise ValueError("Only one session identifier may be provided")
+        return self
+
+
 class SendCtrlBreakParams(BaseModel):
     """Parameters for sending CTRL+BREAK to a CDB/WinDbg session."""
     dump_path: Optional[str] = Field(default=None, description="Path to the Windows crash dump file")
     connection_string: Optional[str] = Field(default=None, description="Remote connection string (e.g., 'tcp:Port=5005,Server=192.168.0.100')")
     pid: Optional[int] = Field(default=None, description="PID of the attached local process")
     process_name: Optional[str] = Field(default=None, description="Name of the attached local process")
+    kernel_connection: Optional[str] = Field(default=None, description="Kernel debugging transport string. For kernel sessions this sends a '.break' command to pause the target machine.")
 
     @model_validator(mode='after')
     def validate_connection_params(self):
-        provided = sum([bool(self.dump_path), bool(self.connection_string), self.pid is not None, bool(self.process_name)])
+        provided = sum([bool(self.dump_path), bool(self.connection_string), self.pid is not None,
+                        bool(self.process_name), bool(self.kernel_connection)])
         if provided == 0:
-            raise ValueError("One of dump_path, connection_string, pid, or process_name must be provided")
+            raise ValueError("One of dump_path, connection_string, pid, process_name, or kernel_connection must be provided")
         if provided > 1:
-            raise ValueError("dump_path, connection_string, pid, and process_name are mutually exclusive")
+            raise ValueError("dump_path, connection_string, pid, process_name, and kernel_connection are mutually exclusive")
         return self
 
 
@@ -167,17 +214,20 @@ def get_or_create_session(
     connection_string: Optional[str] = None,
     pid: Optional[int] = None,
     process_name: Optional[str] = None,
+    kernel_connection: Optional[str] = None,
     cdb_path: Optional[str] = None,
+    kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False
 ) -> CDBSession:
     """Get an existing CDB session or create a new one."""
-    provided = sum([bool(dump_path), bool(connection_string), pid is not None, bool(process_name)])
+    provided = sum([bool(dump_path), bool(connection_string), pid is not None,
+                    bool(process_name), bool(kernel_connection)])
     if provided == 0:
-        raise ValueError("One of dump_path, connection_string, pid, or process_name must be provided")
+        raise ValueError("One of dump_path, connection_string, pid, process_name, or kernel_connection must be provided")
     if provided > 1:
-        raise ValueError("dump_path, connection_string, pid, and process_name are mutually exclusive")
+        raise ValueError("dump_path, connection_string, pid, process_name, and kernel_connection are mutually exclusive")
 
     # Create session identifier
     if dump_path:
@@ -186,6 +236,8 @@ def get_or_create_session(
         session_id = f"remote:{connection_string}"
     elif pid is not None:
         session_id = f"pid:{pid}"
+    elif kernel_connection:
+        session_id = f"kernel:{kernel_connection}"
     else:
         session_id = f"process:{process_name}"
 
@@ -214,7 +266,9 @@ def get_or_create_session(
                 remote_connection=connection_string,
                 attach_process_id=pid,
                 attach_process_name=process_name,
+                kernel_connection=kernel_connection,
                 cdb_path=cdb_path,
+                kd_path=kd_path,
                 symbols_path=symbols_path,
                 timeout=timeout,
                 verbose=verbose
@@ -235,9 +289,11 @@ def unload_session(
     connection_string: Optional[str] = None,
     pid: Optional[int] = None,
     process_name: Optional[str] = None,
+    kernel_connection: Optional[str] = None,
 ) -> bool:
     """Unload and clean up a CDB session."""
-    provided = sum([bool(dump_path), bool(connection_string), pid is not None, bool(process_name)])
+    provided = sum([bool(dump_path), bool(connection_string), pid is not None,
+                    bool(process_name), bool(kernel_connection)])
     if provided != 1:
         return False
 
@@ -248,6 +304,8 @@ def unload_session(
         session_id = f"remote:{connection_string}"
     elif pid is not None:
         session_id = f"pid:{pid}"
+    elif kernel_connection:
+        session_id = f"kernel:{kernel_connection}"
     else:
         session_id = f"process:{process_name}"
 
@@ -284,6 +342,7 @@ def execute_common_analysis_commands(session: CDBSession) -> dict:
 
 async def serve(
     cdb_path: Optional[str] = None,
+    kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
@@ -292,11 +351,12 @@ async def serve(
 
     Args:
         cdb_path: Optional custom path to cdb.exe
+        kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
     """
-    server = _create_server(cdb_path, symbols_path, timeout, verbose)
+    server = _create_server(cdb_path, kd_path, symbols_path, timeout, verbose)
 
     options = server.create_initialization_options()
     async with stdio_server() as (read_stream, write_stream):
@@ -307,6 +367,7 @@ async def serve_http(
     host: str = "127.0.0.1",
     port: int = 8000,
     cdb_path: Optional[str] = None,
+    kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
@@ -317,6 +378,7 @@ async def serve_http(
         host: Host to bind the HTTP server to
         port: Port to bind the HTTP server to
         cdb_path: Optional custom path to cdb.exe
+        kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
@@ -326,7 +388,7 @@ async def serve_http(
     from starlette.types import Receive, Scope, Send
     import uvicorn
 
-    server = _create_server(cdb_path, symbols_path, timeout, verbose)
+    server = _create_server(cdb_path, kd_path, symbols_path, timeout, verbose)
 
     # Create the session manager
     session_manager = StreamableHTTPSessionManager(
@@ -362,6 +424,7 @@ async def serve_http(
 
 def _create_server(
     cdb_path: Optional[str] = None,
+    kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
@@ -370,6 +433,7 @@ def _create_server(
 
     Args:
         cdb_path: Optional custom path to cdb.exe
+        kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
@@ -464,6 +528,49 @@ def _create_server(
                 """,
                 inputSchema=ListLocalProcessesParams.model_json_schema(),
             ),
+            Tool(
+                name="open_windbg_kernel",
+                description="""
+                Connect to a live kernel debugging session using WinDbg/CDB.
+
+                Supported transports:
+                  - KDNET (network):   net:port=50000,key=1.2.3.4
+                  - Serial:            com:port=COM1,baud=115200
+                  - Named pipe (VM):   com:pipe,port=\\\\.\\pipe\\com_1
+                  - USB 3.0:           usb3:targetname=MyTarget
+                  - IEEE 1394:         1394:channel=0
+
+                Prerequisites on the target machine:
+                  bcdedit /debug on
+                  bcdedit /dbgsettings net hostip:<HOST_IP> port:50000   (for KDNET)
+                  (reboot the target after changing settings)
+
+                After this tool returns, the target may still be running.
+                Use 'send_ctrl_break' with kernel_connection to pause it, then
+                use 'run_windbg_cmd' with kernel_connection to send commands.
+                When finished, use 'close_windbg_kernel' to detach gracefully.
+                """,
+                inputSchema=OpenWindbgKernelParams.model_json_schema(),
+            ),
+            Tool(
+                name="close_windbg_kernel",
+                description="""
+                Disconnect from a kernel debugging session.
+                Sends 'qd' (quit and detach) so the target machine keeps running.
+                """,
+                inputSchema=CloseWindbgKernelParams.model_json_schema(),
+            ),
+            Tool(
+                name="get_session_log",
+                description="""
+                Retrieve the raw debugger output accumulated so far from an active session.
+                Use this to see connection messages, kd prompts, and any output that
+                occurred before or between commands (e.g., the 'Connected to Windows...'
+                messages printed by kd when the target VM connects).
+                Supports all session types: kernel, dump, remote, and local process.
+                """,
+                inputSchema=GetSessionLogParams.model_json_schema(),
+            ),
         ]
 
     @server.call_tool()
@@ -503,7 +610,7 @@ def _create_server(
 
                 args = OpenWindbgDump(**arguments)
                 session = get_or_create_session(
-                    dump_path=args.dump_path, cdb_path=cdb_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
+                    dump_path=args.dump_path, cdb_path=cdb_path, kd_path=kd_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
                 )
 
                 results = []
@@ -533,7 +640,7 @@ def _create_server(
             elif name == "open_windbg_remote":
                 args = OpenWindbgRemote(**arguments)
                 session = get_or_create_session(
-                    connection_string=args.connection_string, cdb_path=cdb_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
+                    connection_string=args.connection_string, cdb_path=cdb_path, kd_path=kd_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
                 )
 
                 results = []
@@ -569,9 +676,23 @@ def _create_server(
                 session = get_or_create_session(
                     dump_path=args.dump_path, connection_string=args.connection_string,
                     pid=args.pid, process_name=args.process_name,
-                    cdb_path=cdb_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
+                    kernel_connection=args.kernel_connection,
+                    cdb_path=cdb_path, kd_path=kd_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
                 )
-                output = session.send_command(args.command)
+
+                # Commands that resume target execution never return a prompt while
+                # the target is running.  Detect them automatically so the caller
+                # doesn't have to remember to set no_wait=True.
+                _RESUME_CMDS = frozenset({"g", "gh", "gn", "gc", "gu", "go"})
+                fire_and_forget = args.no_wait or args.command.strip().lower() in _RESUME_CMDS
+
+                output = session.send_command(args.command, fire_and_forget=fire_and_forget)
+
+                if fire_and_forget:
+                    return [TextContent(
+                        type="text",
+                        text=f"Command sent: `{args.command}`\n\nTarget is now running. Use `send_ctrl_break` to pause it again, or `get_session_log` to see output."
+                    )]
 
                 return [TextContent(
                     type="text",
@@ -583,20 +704,26 @@ def _create_server(
                 session = get_or_create_session(
                     dump_path=args.dump_path, connection_string=args.connection_string,
                     pid=args.pid, process_name=args.process_name,
-                    cdb_path=cdb_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
+                    kernel_connection=args.kernel_connection,
+                    cdb_path=cdb_path, kd_path=kd_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
                 )
-                session.send_ctrl_break()
-                if args.dump_path:
-                    target = args.dump_path
-                elif args.connection_string:
-                    target = f"remote: {args.connection_string}"
-                elif args.pid is not None:
-                    target = f"pid: {args.pid}"
+                if args.kernel_connection:
+                    # For kernel sessions, use the CDB .break command over the transport
+                    session.send_kernel_break()
+                    target = f"kernel: {args.kernel_connection}"
                 else:
-                    target = f"process: {args.process_name}"
+                    session.send_ctrl_break()
+                    if args.dump_path:
+                        target = args.dump_path
+                    elif args.connection_string:
+                        target = f"remote: {args.connection_string}"
+                    elif args.pid is not None:
+                        target = f"pid: {args.pid}"
+                    else:
+                        target = f"process: {args.process_name}"
                 return [TextContent(
                     type="text",
-                    text=f"Sent CTRL+BREAK to CDB session ({target})."
+                    text=f"Sent break-in to CDB session ({target}). The target should pause shortly."
                 )]
 
             elif name == "close_windbg_dump":
@@ -679,7 +806,7 @@ def _create_server(
                 args = AttachWindbgProcessParams(**arguments)
                 session = get_or_create_session(
                     pid=args.pid, process_name=args.process_name,
-                    cdb_path=cdb_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
+                    cdb_path=cdb_path, kd_path=kd_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
                 )
 
                 results = []
@@ -759,6 +886,95 @@ def _create_server(
 
                 return [TextContent(type="text", text=result_text)]
 
+            elif name == "open_windbg_kernel":
+                args = OpenWindbgKernelParams(**arguments)
+                session = get_or_create_session(
+                    kernel_connection=args.kernel_connection,
+                    cdb_path=cdb_path, kd_path=kd_path, symbols_path=symbols_path, timeout=timeout, verbose=verbose
+                )
+
+                # At this point CDB is running but the target may still be executing.
+                # Attempt to collect info only if optional flags are set (they imply
+                # the caller has already ensured the target is at a break).
+                results = []
+                results.append(
+                    f"### Kernel Debug Session Established\n"
+                    f"Transport: `{args.kernel_connection}`\n\n"
+                    f"CDB is running and waiting for the target machine.\n\n"
+                    f"**Next steps:**\n"
+                    f"- If the target machine is running, call `send_ctrl_break` with "
+                    f"`kernel_connection` to pause it.\n"
+                    f"- Once the target is at a break, use `run_windbg_cmd` with "
+                    f"`kernel_connection` to send any WinDbg/CDB command.\n"
+                    f"- Useful first commands: `vertarget`, `!analyze -v`, `k`, `lm`, `!process 0 0`\n"
+                    f"- When finished, call `close_windbg_kernel` to detach without crashing the target.\n"
+                )
+
+                if args.include_stack_trace:
+                    try:
+                        stack = session.send_command("k")
+                        results.append("\n### Kernel Stack Trace\n```\n" + "\n".join(stack) + "\n```\n")
+                    except CDBError as e:
+                        results.append(f"\n*Stack trace unavailable (target may still be running): {e}*\n")
+
+                if args.include_modules:
+                    try:
+                        modules = session.send_command("lm")
+                        results.append("\n### Loaded Modules\n```\n" + "\n".join(modules) + "\n```\n")
+                    except CDBError as e:
+                        results.append(f"\n*Module list unavailable (target may still be running): {e}*\n")
+
+                return [TextContent(type="text", text="".join(results))]
+
+            elif name == "close_windbg_kernel":
+                args = CloseWindbgKernelParams(**arguments)
+                success = unload_session(kernel_connection=args.kernel_connection)
+                if success:
+                    return [TextContent(
+                        type="text",
+                        text=f"Kernel debug session closed (`{args.kernel_connection}`). "
+                             f"The target machine has been detached and continues running."
+                    )]
+                else:
+                    return [TextContent(
+                        type="text",
+                        text=f"No active kernel debug session found for: {args.kernel_connection}"
+                    )]
+
+            elif name == "get_session_log":
+                args = GetSessionLogParams(**arguments)
+                session_id_map = {
+                    'kernel': args.kernel_connection,
+                    'dump': args.dump_path,
+                    'remote': args.connection_string,
+                    'pid': args.pid,
+                    'process': args.process_name,
+                }
+                # Build the session_id key used in active_sessions
+                if args.dump_path:
+                    sid = os.path.abspath(args.dump_path)
+                elif args.connection_string:
+                    sid = f"remote:{args.connection_string}"
+                elif args.pid is not None:
+                    sid = f"pid:{args.pid}"
+                elif args.kernel_connection:
+                    sid = f"kernel:{args.kernel_connection}"
+                else:
+                    sid = f"process:{args.process_name}"
+
+                session = active_sessions.get(sid)
+                if session is None:
+                    return [TextContent(type="text", text=f"No active session found for: {sid}")]
+
+                lines = session.get_session_log(max_lines=args.max_lines)
+                if not lines:
+                    return [TextContent(type="text", text="Session log is empty (no output received yet).")]
+
+                return [TextContent(
+                    type="text",
+                    text=f"### Session Log (last {len(lines)} lines)\n```\n" + "\n".join(lines) + "\n```"
+                )]
+
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=f"Unknown tool: {name}"
@@ -778,6 +994,10 @@ def _create_server(
     DUMP_TRIAGE_PROMPT_TITLE = "Crash Dump Triage Analysis"
     DUMP_TRIAGE_PROMPT_DESCRIPTION = "Comprehensive single crash dump analysis with detailed metadata extraction and structured reporting"
 
+    KERNEL_TRIAGE_PROMPT_NAME = "kernel-triage"
+    KERNEL_TRIAGE_PROMPT_TITLE = "Kernel Debug Session Triage"
+    KERNEL_TRIAGE_PROMPT_DESCRIPTION = "Live kernel debugging session analysis via KD transport (KDNET, serial, named pipe, USB, 1394)"
+
     # Define available prompts for triage analysis
     @server.list_prompts()
     async def list_prompts() -> list[Prompt]:
@@ -790,6 +1010,18 @@ def _create_server(
                     PromptArgument(
                         name="dump_path",
                         description="Path to the Windows crash dump file to analyze (optional - will prompt if not provided)",
+                        required=False,
+                    ),
+                ],
+            ),
+            Prompt(
+                name=KERNEL_TRIAGE_PROMPT_NAME,
+                title=KERNEL_TRIAGE_PROMPT_TITLE,
+                description=KERNEL_TRIAGE_PROMPT_DESCRIPTION,
+                arguments=[
+                    PromptArgument(
+                        name="kernel_connection",
+                        description="KD transport string (e.g., 'net:port=50000,key=1.2.3.4'). Optional - will prompt if not provided.",
                         required=False,
                     ),
                 ],
@@ -819,6 +1051,34 @@ def _create_server(
 
             return GetPromptResult(
                 description=DUMP_TRIAGE_PROMPT_DESCRIPTION,
+                messages=[
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(
+                            type="text",
+                            text=prompt_text
+                        ),
+                    ),
+                ],
+            )
+
+        elif name == KERNEL_TRIAGE_PROMPT_NAME:
+            kernel_connection = arguments.get("kernel_connection", "")
+            try:
+                prompt_content = load_prompt("kernel-triage")
+            except FileNotFoundError as e:
+                raise McpError(ErrorData(
+                    code=INTERNAL_ERROR,
+                    message=f"Prompt file not found: {e}"
+                ))
+
+            if kernel_connection:
+                prompt_text = f"**Kernel connection transport:** `{kernel_connection}`\n\n{prompt_content}"
+            else:
+                prompt_text = prompt_content
+
+            return GetPromptResult(
+                description=KERNEL_TRIAGE_PROMPT_DESCRIPTION,
                 messages=[
                     PromptMessage(
                         role="user",
