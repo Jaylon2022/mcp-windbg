@@ -190,6 +190,24 @@ def get_or_create_session(
         session_id = f"process:{process_name}"
 
     if session_id not in active_sessions or active_sessions[session_id] is None:
+        create_new = True
+    else:
+        existing = active_sessions[session_id]
+        # Check whether the underlying CDB process is still alive.
+        # If it has exited (e.g. remote connection dropped), discard the stale
+        # session and create a fresh one so the caller gets a working session
+        # rather than repeated timeouts against a dead process.
+        if existing.process is None or not existing._is_alive or existing.process.poll() is not None:
+            try:
+                existing.shutdown()
+            except Exception:
+                pass
+            del active_sessions[session_id]
+            create_new = True
+        else:
+            create_new = False
+
+    if create_new:
         try:
             session = CDBSession(
                 dump_path=dump_path,

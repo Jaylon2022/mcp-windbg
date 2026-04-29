@@ -134,6 +134,7 @@ class CDBSession:
         self.output_lines = []
         self.lock = threading.Lock()
         self.ready_event = threading.Event()
+        self._is_alive = True  # set to False when the CDB process exits
         self.reader_thread = threading.Thread(target=self._read_output)
         self.reader_thread.daemon = True
         self.reader_thread.start()
@@ -186,16 +187,26 @@ class CDBSession:
         except (IOError, ValueError) as e:
             if self.verbose:
                 print(f"CDB output reader error: {e}")
+        finally:
+            # Process has exited or stdout was closed. Unblock any send_command
+            # that is currently waiting so it gets a CDBError instead of hanging
+            # until timeout.
+            self._is_alive = False
+            self.ready_event.set()
 
     def _wait_for_prompt(self, timeout=None):
         """Wait for CDB to be ready for commands by sending a marker"""
         try:
-            self.ready_event.clear()
+            with self.lock:
+                self.ready_event.clear()
+                self.output_lines = []
             self.process.stdin.write(f"{COMMAND_MARKER}\n")
             self.process.stdin.flush()
 
             if not self.ready_event.wait(timeout=timeout or self.timeout):
                 raise CDBError(f"Timed out waiting for CDB prompt")
+            if not self._is_alive:
+                raise CDBError("CDB process exited unexpectedly during initialization")
         except IOError as e:
             raise CDBError(f"Failed to communicate with CDB: {str(e)}")
 
@@ -213,11 +224,14 @@ class CDBSession:
         Raises:
             CDBError: If the command times out or CDB is not responsive
         """
-        if not self.process:
+        if not self.process or not self._is_alive:
             raise CDBError("CDB process is not running")
+        if self.process.poll() is not None:
+            self._is_alive = False
+            raise CDBError("CDB process has exited")
 
-        self.ready_event.clear()
         with self.lock:
+            self.ready_event.clear()  # inside lock to avoid race with reader thread
             self.output_lines = []
 
         try:
@@ -231,6 +245,9 @@ class CDBSession:
         if not self.ready_event.wait(timeout=cmd_timeout):
             raise CDBError(f"Command timed out after {cmd_timeout} seconds: {command}")
 
+        if not self._is_alive:
+            raise CDBError("CDB process exited unexpectedly while waiting for command output")
+
         with self.lock:
             result = self.output_lines.copy()
             self.output_lines = []
@@ -242,8 +259,11 @@ class CDBSession:
             if self.process and self.process.poll() is None:
                 try:
                     if self.remote_connection:
-                        # For remote connections, send CTRL+B to detach
-                        self.process.stdin.write("\x02")  # CTRL+B
+                        # For remote client connections, 'qq' exits the client
+                        # without killing the debug server or the target.
+                        # 'q' would kill the target; \x02 written to stdin is
+                        # not equivalent to pressing Ctrl+Break in a console.
+                        self.process.stdin.write("qq\n")
                         self.process.stdin.flush()
                     elif self.attach_process_id is not None or self.attach_process_name:
                         # For local process attach, detach gracefully then quit
