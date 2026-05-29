@@ -998,6 +998,18 @@ def _create_server(
     KERNEL_TRIAGE_PROMPT_TITLE = "Kernel Debug Session Triage"
     KERNEL_TRIAGE_PROMPT_DESCRIPTION = "Live kernel debugging session analysis via KD transport (KDNET, serial, named pipe, USB, 1394)"
 
+    MEMORY_LEAK_PROMPT_NAME = "memory-leak"
+    MEMORY_LEAK_PROMPT_TITLE = "Memory Leak Analysis"
+    MEMORY_LEAK_PROMPT_DESCRIPTION = "Systematic memory leak detection and analysis for live processes or full-heap crash dumps, including kernel pool leak analysis"
+
+    CRASH_INVESTIGATION_PROMPT_NAME = "crash-investigation"
+    CRASH_INVESTIGATION_PROMPT_TITLE = "Crash Root-Cause Investigation"
+    CRASH_INVESTIGATION_PROMPT_DESCRIPTION = "Step-by-step interactive root-cause investigation for Windows crashes - covers access violations, heap corruption, stack overflows, C++ exceptions, and more"
+
+    HANDLE_LEAK_PROMPT_NAME = "handle-leak"
+    HANDLE_LEAK_PROMPT_TITLE = "Handle Leak Investigation"
+    HANDLE_LEAK_PROMPT_DESCRIPTION = "Systematic investigation of Windows kernel handle leaks (files, events, mutexes, registry keys, threads, sockets, etc.) using !handle, !htrace, and GFlags htc"
+
     # Define available prompts for triage analysis
     @server.list_prompts()
     async def list_prompts() -> list[Prompt]:
@@ -1022,6 +1034,42 @@ def _create_server(
                     PromptArgument(
                         name="kernel_connection",
                         description="KD transport string (e.g., 'net:port=50000,key=1.2.3.4'). Optional - will prompt if not provided.",
+                        required=False,
+                    ),
+                ],
+            ),
+            Prompt(
+                name=MEMORY_LEAK_PROMPT_NAME,
+                title=MEMORY_LEAK_PROMPT_TITLE,
+                description=MEMORY_LEAK_PROMPT_DESCRIPTION,
+                arguments=[
+                    PromptArgument(
+                        name="target",
+                        description="Process name, PID, dump file path, or kernel connection string. Optional - will guide you through selection if not provided.",
+                        required=False,
+                    ),
+                ],
+            ),
+            Prompt(
+                name=CRASH_INVESTIGATION_PROMPT_NAME,
+                title=CRASH_INVESTIGATION_PROMPT_TITLE,
+                description=CRASH_INVESTIGATION_PROMPT_DESCRIPTION,
+                arguments=[
+                    PromptArgument(
+                        name="dump_path",
+                        description="Path to the Windows crash dump file to investigate. Optional - can also attach to a live process.",
+                        required=False,
+                    ),
+                ],
+            ),
+            Prompt(
+                name=HANDLE_LEAK_PROMPT_NAME,
+                title=HANDLE_LEAK_PROMPT_TITLE,
+                description=HANDLE_LEAK_PROMPT_DESCRIPTION,
+                arguments=[
+                    PromptArgument(
+                        name="target",
+                        description="Process name or PID to investigate for handle leaks. Optional - will guide you through identification if not provided.",
                         required=False,
                     ),
                 ],
@@ -1079,6 +1127,90 @@ def _create_server(
 
             return GetPromptResult(
                 description=KERNEL_TRIAGE_PROMPT_DESCRIPTION,
+                messages=[
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(
+                            type="text",
+                            text=prompt_text
+                        ),
+                    ),
+                ],
+            )
+
+        elif name == MEMORY_LEAK_PROMPT_NAME:
+            target = arguments.get("target", "")
+            try:
+                prompt_content = load_prompt("memory-leak")
+            except FileNotFoundError as e:
+                raise McpError(ErrorData(
+                    code=INTERNAL_ERROR,
+                    message=f"Prompt file not found: {e}"
+                ))
+
+            if target:
+                prompt_text = f"**Target to analyze:** {target}\n\n{prompt_content}"
+            else:
+                prompt_text = prompt_content
+
+            return GetPromptResult(
+                description=MEMORY_LEAK_PROMPT_DESCRIPTION,
+                messages=[
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(
+                            type="text",
+                            text=prompt_text
+                        ),
+                    ),
+                ],
+            )
+
+        elif name == CRASH_INVESTIGATION_PROMPT_NAME:
+            dump_path = arguments.get("dump_path", "")
+            try:
+                prompt_content = load_prompt("crash-investigation")
+            except FileNotFoundError as e:
+                raise McpError(ErrorData(
+                    code=INTERNAL_ERROR,
+                    message=f"Prompt file not found: {e}"
+                ))
+
+            if dump_path:
+                prompt_text = f"**Dump file to investigate:** {dump_path}\n\n{prompt_content}"
+            else:
+                prompt_text = prompt_content
+
+            return GetPromptResult(
+                description=CRASH_INVESTIGATION_PROMPT_DESCRIPTION,
+                messages=[
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(
+                            type="text",
+                            text=prompt_text
+                        ),
+                    ),
+                ],
+            )
+
+        elif name == HANDLE_LEAK_PROMPT_NAME:
+            target = arguments.get("target", "")
+            try:
+                prompt_content = load_prompt("handle-leak")
+            except FileNotFoundError as e:
+                raise McpError(ErrorData(
+                    code=INTERNAL_ERROR,
+                    message=f"Prompt file not found: {e}"
+                ))
+
+            if target:
+                prompt_text = f"**Target to investigate:** {target}\n\n{prompt_content}"
+            else:
+                prompt_text = prompt_content
+
+            return GetPromptResult(
+                description=HANDLE_LEAK_PROMPT_DESCRIPTION,
                 messages=[
                     PromptMessage(
                         role="user",
