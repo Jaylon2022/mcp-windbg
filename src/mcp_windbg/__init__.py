@@ -12,8 +12,7 @@ def main():
     parser.add_argument("--kd-path", type=str, help="Custom path to kd.exe (kernel-mode debugger, used for kernel debugging sessions)")
     parser.add_argument("--symbols-path", type=str, help="Custom symbols path")
     parser.add_argument("--sysinternals-path", type=str, help="Path to Sysinternals Suite directory (e.g. E:\\SysinternalsSuite)")
-    parser.add_argument("--xperf-path", type=str, help="Custom path to xperf.exe (Windows Performance Toolkit, used for ETL trace analysis)")
-    parser.add_argument("--gpuview-path", type=str, help="Path to GPUView.exe directory (Windows Performance Toolkit GPUView, used for GPU ETL trace analysis)")
+    parser.add_argument("--wpt-path", type=str, help="Path to the Windows Performance Toolkit (WPT) directory, e.g. C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit. Enables xperf ETL analysis (xperf.exe) and GPU trace analysis (GPUView.exe). Auto-detected from standard WPT install locations if not specified.")
     parser.add_argument("--timeout", type=int, default=30, help="Command timeout in seconds")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
 
@@ -36,8 +35,7 @@ def main():
             kd_path=args.kd_path,
             symbols_path=args.symbols_path,
             sysinternals_path=args.sysinternals_path,
-            xperf_path=args.xperf_path,
-            gpuview_path=args.gpuview_path,
+            wpt_path=args.wpt_path,
             timeout=args.timeout,
             verbose=args.verbose
         ))
@@ -49,8 +47,7 @@ def main():
             kd_path=args.kd_path,
             symbols_path=args.symbols_path,
             sysinternals_path=args.sysinternals_path,
-            xperf_path=args.xperf_path,
-            gpuview_path=args.gpuview_path,
+            wpt_path=args.wpt_path,
             timeout=args.timeout,
             verbose=args.verbose
         ))

@@ -417,8 +417,7 @@ async def serve(
     kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     sysinternals_path: Optional[str] = None,
-    xperf_path: Optional[str] = None,
-    gpuview_path: Optional[str] = None,
+    wpt_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> None:
@@ -429,12 +428,11 @@ async def serve(
         kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
         sysinternals_path: Optional path to Sysinternals Suite directory
-        xperf_path: Optional path to xperf.exe (Windows Performance Toolkit)
-        gpuview_path: Optional path to GPUView.exe directory
+        wpt_path: Optional path to Windows Performance Toolkit directory (contains xperf.exe, GPUView.exe)
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
     """
-    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, xperf_path, gpuview_path, timeout, verbose)
+    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, wpt_path, timeout, verbose)
 
     options = server.create_initialization_options()
     async with stdio_server() as (read_stream, write_stream):
@@ -448,8 +446,7 @@ async def serve_http(
     kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     sysinternals_path: Optional[str] = None,
-    xperf_path: Optional[str] = None,
-    gpuview_path: Optional[str] = None,
+    wpt_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> None:
@@ -462,8 +459,7 @@ async def serve_http(
         kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
         sysinternals_path: Optional path to Sysinternals Suite directory
-        xperf_path: Optional path to xperf.exe (Windows Performance Toolkit)
-        gpuview_path: Optional path to GPUView.exe directory
+        wpt_path: Optional path to Windows Performance Toolkit directory (contains xperf.exe, GPUView.exe)
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
     """
@@ -472,7 +468,7 @@ async def serve_http(
     from starlette.types import Receive, Scope, Send
     import uvicorn
 
-    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, xperf_path, gpuview_path, timeout, verbose)
+    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, wpt_path, timeout, verbose)
 
     # Create the session manager
     session_manager = StreamableHTTPSessionManager(
@@ -506,37 +502,35 @@ async def serve_http(
     await server_instance.serve()
 
 
-def _resolve_xperf_path(xperf_path: Optional[str]) -> Optional[str]:
-    """Resolve xperf.exe path: use explicit path if given, otherwise probe common WPT locations."""
-    if xperf_path and os.path.isfile(xperf_path):
-        return xperf_path
+def _resolve_wpt_tools(wpt_path: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Resolve xperf.exe and GPUView.exe paths from a WPT directory or auto-detect.
+
+    Returns:
+        (xperf_exe_path, gpuview_dir_path) — either or both may be None if not found.
+    """
     candidate_dirs = [
+        wpt_path,  # user-provided first
         r"C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit",
         r"C:\Program Files\Windows Kits\10\Windows Performance Toolkit",
     ]
-    for d in candidate_dirs:
-        candidate = os.path.join(d, "xperf.exe")
-        if os.path.isfile(candidate):
-            return candidate
-    return xperf_path  # Return as-is (may be just "xperf.exe" on PATH)
 
+    xperf_exe: Optional[str] = None
+    gpuview_dir: Optional[str] = None
 
-def _resolve_gpuview_path(gpuview_path: Optional[str]) -> Optional[str]:
-    """Resolve GPUView.exe directory: use explicit path if given, otherwise probe common WPT locations."""
-    # Accept either a directory or a direct path to GPUView.exe
-    if gpuview_path:
-        if os.path.isfile(gpuview_path):
-            return os.path.dirname(gpuview_path)  # normalize to directory
-        if os.path.isdir(gpuview_path) and os.path.isfile(os.path.join(gpuview_path, "GPUView.exe")):
-            return gpuview_path
-    candidate_dirs = [
-        r"C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit",
-        r"C:\Program Files\Windows Kits\10\Windows Performance Toolkit",
-    ]
     for d in candidate_dirs:
-        if os.path.isfile(os.path.join(d, "GPUView.exe")):
-            return d
-    return None
+        if not d or not os.path.isdir(d):
+            continue
+        if xperf_exe is None:
+            candidate = os.path.join(d, "xperf.exe")
+            if os.path.isfile(candidate):
+                xperf_exe = candidate
+        if gpuview_dir is None:
+            if os.path.isfile(os.path.join(d, "GPUView.exe")):
+                gpuview_dir = d
+        if xperf_exe and gpuview_dir:
+            break
+
+    return xperf_exe, gpuview_dir
 
 
 def _create_server(
@@ -544,8 +538,7 @@ def _create_server(
     kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     sysinternals_path: Optional[str] = None,
-    xperf_path: Optional[str] = None,
-    gpuview_path: Optional[str] = None,
+    wpt_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> Server:
@@ -556,16 +549,14 @@ def _create_server(
         kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
         sysinternals_path: Optional path to Sysinternals Suite directory
-        xperf_path: Optional path to xperf.exe (Windows Performance Toolkit)
-        gpuview_path: Optional path to GPUView.exe directory
+        wpt_path: Optional path to Windows Performance Toolkit directory (contains xperf.exe, GPUView.exe)
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
 
     Returns:
         Configured Server instance
     """
-    xperf_path = _resolve_xperf_path(xperf_path)
-    gpuview_path = _resolve_gpuview_path(gpuview_path)
+    xperf_path, gpuview_path = _resolve_wpt_tools(wpt_path)
     server = Server("mcp-windbg")
 
     @server.list_tools()
