@@ -72,6 +72,7 @@ Endpoint: `http://127.0.0.1:8000/mcp`
 --kd-path PATH                       Custom path to kd.exe (kernel-mode debugger)
 --symbols-path PATH                  Custom symbols path
 --sysinternals-path PATH             Path to Sysinternals Suite directory
+--xperf-path PATH                    Path to xperf.exe (Windows Performance Toolkit)
 --timeout SECONDS                    Command timeout (default: 30)
 --verbose                            Enable verbose output
 ```
@@ -84,6 +85,7 @@ Endpoint: `http://127.0.0.1:8000/mcp`
 | `--kd-path` | Auto-detect | Path to `kd.exe` (kernel debugger). Required for kernel dump analysis and live kernel debugging via KDNET/serial/USB. |
 | `--symbols-path` | — | Symbol search path in standard `_NT_SYMBOL_PATH` format. Can also be set via the `_NT_SYMBOL_PATH` environment variable. |
 | `--sysinternals-path` | — | Path to the [Sysinternals Suite](https://learn.microsoft.com/en-us/sysinternals/downloads/sysinternals-suite) directory. When set, the `debugger-tools-guide` prompt automatically includes the configured path so the AI knows where to find tools like `procdump64.exe`, `handle64.exe`, `Procmon64.exe`, etc. |
+| `--xperf-path` | Auto-detect | Path to `xperf.exe` from the [Windows Performance Toolkit (WPT)](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/). Auto-detected from common WPT install locations. Required to use `analyze_etl_trace` and `run_xperf_cmd` tools for ETL trace analysis. |
 | `--timeout` | `30` | Per-command timeout in seconds. Increase for large dumps or slow symbol downloads (e.g. `--timeout 600`). |
 | `--verbose` | false | Enable verbose logging for server-side diagnostics. |
 
@@ -122,7 +124,8 @@ For a fully configured setup with custom tool paths:
                 "--timeout", "600",
                 "--cdb-path", "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe",
                 "--kd-path",  "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\kd.exe",
-                "--sysinternals-path", "C:\\Tools\\SysinternalsSuite"
+                "--sysinternals-path", "C:\\Tools\\SysinternalsSuite",
+                "--xperf-path", "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\xperf.exe"
             ],
             "env": {
                 "_NT_SYMBOL_PATH": "C:\\MyDriver\\pdb;SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols"
@@ -137,6 +140,7 @@ For a fully configured setup with custom tool paths:
 | `--cdb-path` | Full path to `cdb.exe`. Omit to auto-detect from standard WinDbg install locations. |
 | `--kd-path` | Full path to `kd.exe`. Required for kernel dump analysis and KDNET live debugging. |
 | `--sysinternals-path` | Directory containing the [Sysinternals Suite](https://learn.microsoft.com/en-us/sysinternals/downloads/sysinternals-suite). Enables the `debugger-tools-guide` prompt to reference tools like `procdump64.exe`, `handle64.exe`, `Procmon64.exe` with correct paths. |
+| `--xperf-path` | Path to `xperf.exe` (Windows Performance Toolkit). Enables `analyze_etl_trace` and `run_xperf_cmd` tools. Auto-detected from common WPT locations if not specified. |
 | `--timeout` | Per-command timeout in seconds. Use `600` or higher when analyzing large dumps or downloading symbols. |
 | `_NT_SYMBOL_PATH` | Symbol search path. Prefix private PDB directories before the public symbol server. |
 
@@ -194,6 +198,8 @@ The beauty of MCP is that you write the server once, and it works everywhere. Ch
 | [`open_windbg_kernel`](https://github.com/svnscha/mcp-windbg/wiki/Tools#open_windbg_kernel) | Connect to kernel debugging session | Driver / BSoD / kernel-mode analysis |
 | [`close_windbg_kernel`](https://github.com/svnscha/mcp-windbg/wiki/Tools#close_windbg_kernel) | Disconnect kernel session | Graceful detach (target keeps running) |
 | [`get_session_log`](https://github.com/svnscha/mcp-windbg/wiki/Tools#get_session_log) | Retrieve raw debugger output log | Inspect output between commands |
+| [`analyze_etl_trace`](https://github.com/svnscha/mcp-windbg/wiki/Tools#analyze_etl_trace) | Analyze Windows ETW (.etl) trace files | Performance & I/O analysis via xperf |
+| [`run_xperf_cmd`](https://github.com/svnscha/mcp-windbg/wiki/Tools#run_xperf_cmd) | Run arbitrary xperf command | Merge ETL files, custom analysis, provider queries |
 
 ## Documentation
 

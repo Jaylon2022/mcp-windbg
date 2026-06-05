@@ -209,6 +209,43 @@ class SendCtrlBreakParams(BaseModel):
         return self
 
 
+class AnalyzeEtlParams(BaseModel):
+    """Parameters for analyzing a Windows ETW trace (.etl) file with xperf."""
+    etl_path: str = Field(description="Path to the .etl trace file to analyze")
+    actions: list[str] = Field(
+        default=["summary"],
+        description=(
+            "List of xperf post-processing actions to run. Common actions:\n"
+            "  summary        - General trace statistics\n"
+            "  tracestats     - Event counts per provider\n"
+            "  cpusampling    - CPU sampling call stacks\n"
+            "  diskio         - Disk I/O activity\n"
+            "  fileio         - File I/O activity\n"
+            "  registry       - Registry access\n"
+            "  process        - Process start/stop events\n"
+            "  thread         - Thread activity\n"
+            "  marks          - Marks and regions of interest"
+        )
+    )
+    output_file: Optional[str] = Field(
+        default=None,
+        description="Optional output file path for CSV/text data. If not specified, output is returned inline (may be large for cpusampling)."
+    )
+
+
+class RunXperfCmdParams(BaseModel):
+    """Parameters for running an arbitrary xperf command."""
+    args: str = Field(
+        description=(
+            "xperf arguments (everything after 'xperf'). Examples:\n"
+            "  -i C:\\trace.etl -a summary\n"
+            "  -i C:\\trace.etl -o C:\\out.csv -a cpusampling\n"
+            "  -merge kernel.etl user.etl merged.etl\n"
+            "  -i C:\\trace.etl -a tracestats"
+        )
+    )
+
+
 def get_or_create_session(
     dump_path: Optional[str] = None,
     connection_string: Optional[str] = None,
@@ -345,6 +382,7 @@ async def serve(
     kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     sysinternals_path: Optional[str] = None,
+    xperf_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> None:
@@ -355,10 +393,11 @@ async def serve(
         kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
         sysinternals_path: Optional path to Sysinternals Suite directory
+        xperf_path: Optional path to xperf.exe (Windows Performance Toolkit)
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
     """
-    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, timeout, verbose)
+    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, xperf_path, timeout, verbose)
 
     options = server.create_initialization_options()
     async with stdio_server() as (read_stream, write_stream):
@@ -372,6 +411,7 @@ async def serve_http(
     kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     sysinternals_path: Optional[str] = None,
+    xperf_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> None:
@@ -384,6 +424,7 @@ async def serve_http(
         kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
         sysinternals_path: Optional path to Sysinternals Suite directory
+        xperf_path: Optional path to xperf.exe (Windows Performance Toolkit)
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
     """
@@ -392,7 +433,7 @@ async def serve_http(
     from starlette.types import Receive, Scope, Send
     import uvicorn
 
-    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, timeout, verbose)
+    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, xperf_path, timeout, verbose)
 
     # Create the session manager
     session_manager = StreamableHTTPSessionManager(
@@ -426,11 +467,27 @@ async def serve_http(
     await server_instance.serve()
 
 
+def _resolve_xperf_path(xperf_path: Optional[str]) -> Optional[str]:
+    """Resolve xperf.exe path: use explicit path if given, otherwise probe common WPT locations."""
+    if xperf_path and os.path.isfile(xperf_path):
+        return xperf_path
+    candidate_dirs = [
+        r"C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit",
+        r"C:\Program Files\Windows Kits\10\Windows Performance Toolkit",
+    ]
+    for d in candidate_dirs:
+        candidate = os.path.join(d, "xperf.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    return xperf_path  # Return as-is (may be just "xperf.exe" on PATH)
+
+
 def _create_server(
     cdb_path: Optional[str] = None,
     kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     sysinternals_path: Optional[str] = None,
+    xperf_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> Server:
@@ -441,12 +498,14 @@ def _create_server(
         kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
         sysinternals_path: Optional path to Sysinternals Suite directory
+        xperf_path: Optional path to xperf.exe (Windows Performance Toolkit)
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
 
     Returns:
         Configured Server instance
     """
+    xperf_path = _resolve_xperf_path(xperf_path)
     server = Server("mcp-windbg")
 
     @server.list_tools()
@@ -576,6 +635,42 @@ def _create_server(
                 Supports all session types: kernel, dump, remote, and local process.
                 """,
                 inputSchema=GetSessionLogParams.model_json_schema(),
+            ),
+            Tool(
+                name="analyze_etl_trace",
+                description="""
+                Analyze a Windows ETW (.etl) trace file using xperf (Windows Performance Toolkit).
+                Runs one or more xperf post-processing actions against the ETL file and returns the output.
+
+                Common actions:
+                  summary       - General trace statistics (event counts, time range, CPU)
+                  tracestats    - Detailed event counts per provider/opcode
+                  cpusampling   - CPU sampling call stacks (use output_file for large traces)
+                  diskio        - Disk I/O activity (bytes read/written, latency)
+                  fileio        - File I/O activity
+                  registry      - Registry access patterns
+                  process       - Process start/stop events
+                  thread        - Thread creation/deletion
+                  marks         - User-defined marks and regions of interest
+
+                Requires xperf.exe from the Windows Performance Toolkit (WPT), available via
+                the Windows ADK. Use --xperf-path when starting the server if not in a default location.
+                """,
+                inputSchema=AnalyzeEtlParams.model_json_schema(),
+            ),
+            Tool(
+                name="run_xperf_cmd",
+                description="""
+                Run an arbitrary xperf command and return its output.
+                Use this for advanced scenarios not covered by analyze_etl_trace, such as:
+                  - Merging multiple ETL files: -merge kernel.etl user.etl merged.etl
+                  - Custom output formats: -i trace.etl -o out.csv -a cpusampling
+                  - Querying providers: -providers
+                  - Starting/stopping capture: -on ... / -stop ...
+
+                Requires xperf.exe from the Windows Performance Toolkit.
+                """,
+                inputSchema=RunXperfCmdParams.model_json_schema(),
             ),
         ]
 
@@ -980,6 +1075,79 @@ def _create_server(
                     type="text",
                     text=f"### Session Log (last {len(lines)} lines)\n```\n" + "\n".join(lines) + "\n```"
                 )]
+
+            elif name == "analyze_etl_trace":
+                import subprocess as _sp
+                args = AnalyzeEtlParams(**arguments)
+                if not xperf_path:
+                    raise McpError(ErrorData(
+                        code=INVALID_PARAMS,
+                        message="xperf.exe not found. Install the Windows Performance Toolkit (WPT) from the Windows ADK, "
+                                "then restart the server with --xperf-path pointing to xperf.exe."
+                    ))
+                if not os.path.isfile(args.etl_path):
+                    raise McpError(ErrorData(
+                        code=INVALID_PARAMS,
+                        message=f"ETL file not found: {args.etl_path}"
+                    ))
+
+                results = []
+                for action in args.actions:
+                    cmd = [xperf_path, "-i", args.etl_path]
+                    if args.output_file:
+                        cmd += ["-o", args.output_file]
+                    cmd += ["-a", action]
+                    try:
+                        proc = _sp.run(cmd, capture_output=True, text=True, timeout=120)
+                        out = proc.stdout or ""
+                        err = proc.stderr or ""
+                        section = f"### xperf -a {action}\n```\n{out}"
+                        if err:
+                            section += f"\n[stderr]\n{err}"
+                        section += "\n```\n"
+                        if args.output_file:
+                            section += f"\n*Output written to: {args.output_file}*\n"
+                        results.append(section)
+                    except _sp.TimeoutExpired:
+                        results.append(f"### xperf -a {action}\n*Timed out after 120 seconds.*\n")
+                    except Exception as exc:
+                        results.append(f"### xperf -a {action}\n*Error: {exc}*\n")
+
+                return [TextContent(type="text", text="".join(results))]
+
+            elif name == "run_xperf_cmd":
+                import subprocess as _sp
+                import shlex
+                args = RunXperfCmdParams(**arguments)
+                if not xperf_path:
+                    raise McpError(ErrorData(
+                        code=INVALID_PARAMS,
+                        message="xperf.exe not found. Install the Windows Performance Toolkit (WPT) from the Windows ADK, "
+                                "then restart the server with --xperf-path pointing to xperf.exe."
+                    ))
+                # Parse the args string into a list safely
+                try:
+                    extra = shlex.split(args.args, posix=False)
+                except ValueError:
+                    extra = args.args.split()
+                cmd = [xperf_path] + extra
+                try:
+                    proc = _sp.run(cmd, capture_output=True, text=True, timeout=300)
+                    out = proc.stdout or ""
+                    err = proc.stderr or ""
+                    text = f"Command: `{' '.join(cmd)}`\n\nReturn code: {proc.returncode}\n\n"
+                    if out:
+                        text += f"### stdout\n```\n{out}\n```\n"
+                    if err:
+                        text += f"### stderr\n```\n{err}\n```\n"
+                    if not out and not err:
+                        text += "*No output produced.*\n"
+                    return [TextContent(type="text", text=text)]
+                except _sp.TimeoutExpired:
+                    raise McpError(ErrorData(
+                        code=INTERNAL_ERROR,
+                        message="xperf command timed out after 300 seconds."
+                    ))
 
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
