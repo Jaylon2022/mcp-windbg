@@ -188,6 +188,12 @@ The beauty of MCP is that you write the server once, and it works everywhere. Ch
 | [`close_windbg_remote`](https://github.com/svnscha/mcp-windbg/wiki/Tools#close_windbg_remote) | Cleanup remote sessions | Resource management |
 | [`run_windbg_cmd`](https://github.com/svnscha/mcp-windbg/wiki/Tools#run_windbg_cmd) | Execute WinDbg commands | Custom analysis and investigation |
 | [`send_ctrl_break`](https://github.com/svnscha/mcp-windbg/wiki/Tools#send_ctrl_break) | Break into a running target | Interrupt execution during live debugging |
+| [`list_local_processes`](https://github.com/svnscha/mcp-windbg/wiki/Tools#list_local_processes) | List running local processes | Discover PIDs before attaching |
+| [`attach_windbg_process`](https://github.com/svnscha/mcp-windbg/wiki/Tools#attach_windbg_process) | Attach to a live local process | Real-time local process debugging |
+| [`close_windbg_process`](https://github.com/svnscha/mcp-windbg/wiki/Tools#close_windbg_process) | Detach from local process | Resume process after debugging |
+| [`open_windbg_kernel`](https://github.com/svnscha/mcp-windbg/wiki/Tools#open_windbg_kernel) | Connect to kernel debugging session | Driver / BSoD / kernel-mode analysis |
+| [`close_windbg_kernel`](https://github.com/svnscha/mcp-windbg/wiki/Tools#close_windbg_kernel) | Disconnect kernel session | Graceful detach (target keeps running) |
+| [`get_session_log`](https://github.com/svnscha/mcp-windbg/wiki/Tools#get_session_log) | Retrieve raw debugger output log | Inspect output between commands |
 
 ## Documentation
 
