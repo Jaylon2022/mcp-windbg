@@ -1010,6 +1010,10 @@ def _create_server(
     HANDLE_LEAK_PROMPT_TITLE = "Handle Leak Investigation"
     HANDLE_LEAK_PROMPT_DESCRIPTION = "Systematic investigation of Windows kernel handle leaks (files, events, mutexes, registry keys, threads, sockets, etc.) using !handle, !htrace, and GFlags htc"
 
+    DEBUGGER_TOOLS_GUIDE_PROMPT_NAME = "debugger-tools-guide"
+    DEBUGGER_TOOLS_GUIDE_PROMPT_TITLE = "Windows Debugger Tools Guide"
+    DEBUGGER_TOOLS_GUIDE_PROMPT_DESCRIPTION = "根据问题场景推荐合适的 Windows 调试工具（cdb/kd/gflags/umdh/symchk/dbgsrv 等），涵盖崩溃、内存泄漏、符号、远程调试等场景的工具选择决策树"
+
     # Define available prompts for triage analysis
     @server.list_prompts()
     async def list_prompts() -> list[Prompt]:
@@ -1073,6 +1077,12 @@ def _create_server(
                         required=False,
                     ),
                 ],
+            ),
+            Prompt(
+                name=DEBUGGER_TOOLS_GUIDE_PROMPT_NAME,
+                title=DEBUGGER_TOOLS_GUIDE_PROMPT_TITLE,
+                description=DEBUGGER_TOOLS_GUIDE_PROMPT_DESCRIPTION,
+                arguments=[],
             ),
         ]
 
@@ -1217,6 +1227,28 @@ def _create_server(
                         content=TextContent(
                             type="text",
                             text=prompt_text
+                        ),
+                    ),
+                ],
+            )
+
+        elif name == DEBUGGER_TOOLS_GUIDE_PROMPT_NAME:
+            try:
+                prompt_content = load_prompt("debugger-tools-guide")
+            except FileNotFoundError as e:
+                raise McpError(ErrorData(
+                    code=INTERNAL_ERROR,
+                    message=f"Prompt file not found: {e}"
+                ))
+
+            return GetPromptResult(
+                description=DEBUGGER_TOOLS_GUIDE_PROMPT_DESCRIPTION,
+                messages=[
+                    PromptMessage(
+                        role="user",
+                        content=TextContent(
+                            type="text",
+                            text=prompt_content
                         ),
                     ),
                 ],
