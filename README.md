@@ -66,13 +66,26 @@ Endpoint: `http://127.0.0.1:8000/mcp`
 
 ```
 --transport {stdio,streamable-http}  Transport protocol (default: stdio)
---host HOST                              HTTP server host (default: 127.0.0.1)
---port PORT                              HTTP server port (default: 8000)
---cdb-path PATH                          Custom path to cdb.exe
---symbols-path PATH                      Custom symbols path
---timeout SECONDS                        Command timeout (default: 30)
---verbose                                Enable verbose output
+--host HOST                          HTTP server host (default: 127.0.0.1)
+--port PORT                          HTTP server port (default: 8000)
+--cdb-path PATH                      Custom path to cdb.exe
+--kd-path PATH                       Custom path to kd.exe (kernel-mode debugger)
+--symbols-path PATH                  Custom symbols path
+--sysinternals-path PATH             Path to Sysinternals Suite directory
+--timeout SECONDS                    Command timeout (default: 30)
+--verbose                            Enable verbose output
 ```
+
+#### Parameter Details
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--cdb-path` | Auto-detect | Path to `cdb.exe`. Auto-detected from common WinDbg install locations. Set this when CDB is in a non-standard path. |
+| `--kd-path` | Auto-detect | Path to `kd.exe` (kernel debugger). Required for kernel dump analysis and live kernel debugging via KDNET/serial/USB. |
+| `--symbols-path` | — | Symbol search path in standard `_NT_SYMBOL_PATH` format. Can also be set via the `_NT_SYMBOL_PATH` environment variable. |
+| `--sysinternals-path` | — | Path to the [Sysinternals Suite](https://learn.microsoft.com/en-us/sysinternals/downloads/sysinternals-suite) directory. When set, the `debugger-tools-guide` prompt automatically includes the configured path so the AI knows where to find tools like `procdump64.exe`, `handle64.exe`, `Procmon64.exe`, etc. |
+| `--timeout` | `30` | Per-command timeout in seconds. Increase for large dumps or slow symbol downloads (e.g. `--timeout 600`). |
+| `--verbose` | false | Enable verbose logging for server-side diagnostics. |
 
 
 ## Configuration for Visual Studio Code
@@ -96,6 +109,36 @@ To make MCP servers available in all your workspaces, use the global user config
     }
 }
 ```
+
+For a fully configured setup with custom tool paths:
+
+```json
+{
+    "servers": {
+        "mcp_windbg": {
+            "type": "stdio",
+            "command": "mcp-windbg",
+            "args": [
+                "--timeout", "600",
+                "--cdb-path", "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe",
+                "--kd-path",  "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\kd.exe",
+                "--sysinternals-path", "C:\\Tools\\SysinternalsSuite"
+            ],
+            "env": {
+                "_NT_SYMBOL_PATH": "C:\\MyDriver\\pdb;SRV*C:\\Symbols*https://msdl.microsoft.com/download/symbols"
+            }
+        }
+    }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `--cdb-path` | Full path to `cdb.exe`. Omit to auto-detect from standard WinDbg install locations. |
+| `--kd-path` | Full path to `kd.exe`. Required for kernel dump analysis and KDNET live debugging. |
+| `--sysinternals-path` | Directory containing the [Sysinternals Suite](https://learn.microsoft.com/en-us/sysinternals/downloads/sysinternals-suite). Enables the `debugger-tools-guide` prompt to reference tools like `procdump64.exe`, `handle64.exe`, `Procmon64.exe` with correct paths. |
+| `--timeout` | Per-command timeout in seconds. Use `600` or higher when analyzing large dumps or downloading symbols. |
+| `_NT_SYMBOL_PATH` | Symbol search path. Prefix private PDB directories before the public symbol server. |
 
 This enables MCP Windbg in any workspace, without needing a local `.vscode/mcp.json` file.
 
