@@ -344,6 +344,7 @@ async def serve(
     cdb_path: Optional[str] = None,
     kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
+    sysinternals_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> None:
@@ -353,10 +354,11 @@ async def serve(
         cdb_path: Optional custom path to cdb.exe
         kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
+        sysinternals_path: Optional path to Sysinternals Suite directory
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
     """
-    server = _create_server(cdb_path, kd_path, symbols_path, timeout, verbose)
+    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, timeout, verbose)
 
     options = server.create_initialization_options()
     async with stdio_server() as (read_stream, write_stream):
@@ -369,6 +371,7 @@ async def serve_http(
     cdb_path: Optional[str] = None,
     kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
+    sysinternals_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> None:
@@ -380,6 +383,7 @@ async def serve_http(
         cdb_path: Optional custom path to cdb.exe
         kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
+        sysinternals_path: Optional path to Sysinternals Suite directory
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
     """
@@ -388,7 +392,7 @@ async def serve_http(
     from starlette.types import Receive, Scope, Send
     import uvicorn
 
-    server = _create_server(cdb_path, kd_path, symbols_path, timeout, verbose)
+    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, timeout, verbose)
 
     # Create the session manager
     session_manager = StreamableHTTPSessionManager(
@@ -426,6 +430,7 @@ def _create_server(
     cdb_path: Optional[str] = None,
     kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
+    sysinternals_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> Server:
@@ -435,6 +440,7 @@ def _create_server(
         cdb_path: Optional custom path to cdb.exe
         kd_path: Optional custom path to kd.exe (kernel debugger)
         symbols_path: Optional custom symbols path
+        sysinternals_path: Optional path to Sysinternals Suite directory
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
 
@@ -1241,6 +1247,19 @@ def _create_server(
                     message=f"Prompt file not found: {e}"
                 ))
 
+            # Prepend configured tool paths so the AI knows exact locations
+            header_lines = []
+            if cdb_path:
+                cdb_dir = os.path.dirname(cdb_path)
+                header_lines.append(f"- **WinDbg/CDB 工具目录:** `{cdb_dir}`")
+            if sysinternals_path:
+                header_lines.append(f"- **Sysinternals Suite 目录:** `{sysinternals_path}`")
+            if header_lines:
+                header = "## 当前配置的工具路径\n\n" + "\n".join(header_lines) + "\n\n---\n\n"
+                prompt_text = header + prompt_content
+            else:
+                prompt_text = prompt_content
+
             return GetPromptResult(
                 description=DEBUGGER_TOOLS_GUIDE_PROMPT_DESCRIPTION,
                 messages=[
@@ -1248,7 +1267,7 @@ def _create_server(
                         role="user",
                         content=TextContent(
                             type="text",
-                            text=prompt_content
+                            text=prompt_text
                         ),
                     ),
                 ],

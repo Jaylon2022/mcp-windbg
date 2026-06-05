@@ -5,11 +5,13 @@
       "command": "mcp-windbg",
       "args": ["--timeout", "600",
         "--cdb-path", "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe",
-        "--kd-path", "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\kd.exe"
+        "--kd-path", "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\kd.exe",
+        "--sysinternals-path", "E:\\BaiduNetdiskDownload\\SysinternalsSuite"
       ],
       "env": {
+        "_NT_SYMBOL_PATH": "E:\\dump\\1.1.2-beta\\1.1.2-beta\\Wddm_Release\\pdb;E:\\pdb\\sangfor;SRV*D:\\Symbol*https://msdl.microsoft.com/download/symbols"
       }
-          },
+      },
 
     "windbg-ext-mcp": {
       "type": "stdio",
