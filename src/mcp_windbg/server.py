@@ -246,6 +246,41 @@ class RunXperfCmdParams(BaseModel):
     )
 
 
+class AnalyzeGpuEtlParams(BaseModel):
+    """Parameters for analyzing a GPUView-collected ETL file."""
+    etl_path: str = Field(
+        description=(
+            "Path to the merged ETL file collected by GPUView (usually merged.etl produced by Log.cmd). "
+            "If you have separate kernel.etl + user.etl files, merge them first with run_xperf_cmd using "
+            "'-merge kernel.etl user.etl merged.etl'."
+        )
+    )
+    aspects: list[str] = Field(
+        default=["summary", "dpcisr", "tracestats"],
+        description=(
+            "Which GPU-relevant aspects to analyze. Choose from:\n"
+            "  summary      - Overall trace statistics (time range, CPU, event counts)\n"
+            "  tracestats   - Event counts per ETW provider/opcode — use to see DxgKrnl, D3D, DXGI event volume\n"
+            "  dpcisr       - DPC and ISR latency analysis — critical for GPU driver interrupt latency\n"
+            "  dpc          - Deferred Procedure Call detail (GPU driver DPCs)\n"
+            "  isr          - Interrupt Service Routine detail (GPU hardware interrupts)\n"
+            "  cswitch      - Context switch analysis — GPU scheduler thread interactions\n"
+            "  process      - Process start/stop events during the trace\n"
+            "  marks        - User-defined marks (frame markers, present events, etc.)\n"
+            "  diskio       - Disk I/O (useful if GPU crash triggers a minidump write)\n"
+            "  cpusampling  - CPU sampling stacks (use output_file for large traces)"
+        )
+    )
+    output_file: Optional[str] = Field(
+        default=None,
+        description="Optional output file path for CSV/text results. Recommended for cpusampling data which can be very large."
+    )
+    gpu_providers: bool = Field(
+        default=True,
+        description="When True, filters tracestats output to highlight GPU-related ETW providers: DxgKrnl, D3D9, DXGI, Nvlddmkm, DxgPort, etc."
+    )
+
+
 def get_or_create_session(
     dump_path: Optional[str] = None,
     connection_string: Optional[str] = None,
@@ -383,6 +418,7 @@ async def serve(
     symbols_path: Optional[str] = None,
     sysinternals_path: Optional[str] = None,
     xperf_path: Optional[str] = None,
+    gpuview_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> None:
@@ -394,10 +430,11 @@ async def serve(
         symbols_path: Optional custom symbols path
         sysinternals_path: Optional path to Sysinternals Suite directory
         xperf_path: Optional path to xperf.exe (Windows Performance Toolkit)
+        gpuview_path: Optional path to GPUView.exe directory
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
     """
-    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, xperf_path, timeout, verbose)
+    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, xperf_path, gpuview_path, timeout, verbose)
 
     options = server.create_initialization_options()
     async with stdio_server() as (read_stream, write_stream):
@@ -412,6 +449,7 @@ async def serve_http(
     symbols_path: Optional[str] = None,
     sysinternals_path: Optional[str] = None,
     xperf_path: Optional[str] = None,
+    gpuview_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> None:
@@ -425,6 +463,7 @@ async def serve_http(
         symbols_path: Optional custom symbols path
         sysinternals_path: Optional path to Sysinternals Suite directory
         xperf_path: Optional path to xperf.exe (Windows Performance Toolkit)
+        gpuview_path: Optional path to GPUView.exe directory
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
     """
@@ -433,7 +472,7 @@ async def serve_http(
     from starlette.types import Receive, Scope, Send
     import uvicorn
 
-    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, xperf_path, timeout, verbose)
+    server = _create_server(cdb_path, kd_path, symbols_path, sysinternals_path, xperf_path, gpuview_path, timeout, verbose)
 
     # Create the session manager
     session_manager = StreamableHTTPSessionManager(
@@ -482,12 +521,31 @@ def _resolve_xperf_path(xperf_path: Optional[str]) -> Optional[str]:
     return xperf_path  # Return as-is (may be just "xperf.exe" on PATH)
 
 
+def _resolve_gpuview_path(gpuview_path: Optional[str]) -> Optional[str]:
+    """Resolve GPUView.exe directory: use explicit path if given, otherwise probe common WPT locations."""
+    # Accept either a directory or a direct path to GPUView.exe
+    if gpuview_path:
+        if os.path.isfile(gpuview_path):
+            return os.path.dirname(gpuview_path)  # normalize to directory
+        if os.path.isdir(gpuview_path) and os.path.isfile(os.path.join(gpuview_path, "GPUView.exe")):
+            return gpuview_path
+    candidate_dirs = [
+        r"C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit",
+        r"C:\Program Files\Windows Kits\10\Windows Performance Toolkit",
+    ]
+    for d in candidate_dirs:
+        if os.path.isfile(os.path.join(d, "GPUView.exe")):
+            return d
+    return None
+
+
 def _create_server(
     cdb_path: Optional[str] = None,
     kd_path: Optional[str] = None,
     symbols_path: Optional[str] = None,
     sysinternals_path: Optional[str] = None,
     xperf_path: Optional[str] = None,
+    gpuview_path: Optional[str] = None,
     timeout: int = 30,
     verbose: bool = False,
 ) -> Server:
@@ -499,6 +557,7 @@ def _create_server(
         symbols_path: Optional custom symbols path
         sysinternals_path: Optional path to Sysinternals Suite directory
         xperf_path: Optional path to xperf.exe (Windows Performance Toolkit)
+        gpuview_path: Optional path to GPUView.exe directory
         timeout: Command timeout in seconds
         verbose: Whether to enable verbose output
 
@@ -506,6 +565,7 @@ def _create_server(
         Configured Server instance
     """
     xperf_path = _resolve_xperf_path(xperf_path)
+    gpuview_path = _resolve_gpuview_path(gpuview_path)
     server = Server("mcp-windbg")
 
     @server.list_tools()
@@ -671,6 +731,38 @@ def _create_server(
                 Requires xperf.exe from the Windows Performance Toolkit.
                 """,
                 inputSchema=RunXperfCmdParams.model_json_schema(),
+            ),
+            Tool(
+                name="analyze_gpu_etl",
+                description="""
+                Analyze a GPUView-collected ETL trace file for GPU performance and driver issues.
+
+                GPUView collects ETW events from GPU-related providers (DxgKrnl, D3D9, DXGI, display
+                drivers) and produces a merged ETL file. This tool runs GPU-relevant xperf analysis
+                actions against that ETL and highlights GPU provider activity.
+
+                Typical workflow:
+                  1. On the target machine, run Log.cmd (from GPUView installation) to capture a trace.
+                     This produces kernel.etl + user.etl (or a merged.etl directly).
+                  2. If you have separate kernel.etl + user.etl, merge them first:
+                     use run_xperf_cmd with args="-merge kernel.etl user.etl merged.etl"
+                  3. Call analyze_gpu_etl with the merged.etl path.
+
+                What it analyzes:
+                  - summary:    Overall trace time range, CPU utilization, total event counts
+                  - tracestats: Per-provider event counts, filtered for GPU providers:
+                                DxgKrnl (GPU scheduler), D3D9/DXGI (API layer),
+                                display miniport driver (e.g. Nvlddmkm, amdkmdag, jmwddmkmd)
+                  - dpcisr:     DPC/ISR latency — detects GPU interrupt handler delays
+                  - dpc:        Detailed DPC (Deferred Procedure Call) timing per routine
+                  - isr:        Detailed ISR (Interrupt Service Routine) timing per vector
+                  - cswitch:    Context switches — reveals GPU scheduler thread behavior
+                  - marks:      Present/flip markers and user-defined frame boundaries
+
+                Note: For visual frame timeline analysis (GPU queue depth, flip chain, presents),
+                GPUView.exe GUI is still required. This tool provides the text/CSV side of analysis.
+                """,
+                inputSchema=AnalyzeGpuEtlParams.model_json_schema(),
             ),
         ]
 
@@ -1149,6 +1241,87 @@ def _create_server(
                         message="xperf command timed out after 300 seconds."
                     ))
 
+            elif name == "analyze_gpu_etl":
+                import subprocess as _sp
+                args = AnalyzeGpuEtlParams(**arguments)
+                if not xperf_path:
+                    raise McpError(ErrorData(
+                        code=INVALID_PARAMS,
+                        message="xperf.exe not found. Install the Windows Performance Toolkit (WPT) from the Windows ADK, "
+                                "then restart the server with --xperf-path pointing to xperf.exe."
+                    ))
+                if not os.path.isfile(args.etl_path):
+                    raise McpError(ErrorData(
+                        code=INVALID_PARAMS,
+                        message=f"ETL file not found: {args.etl_path}\n"
+                                "If you have separate kernel.etl + user.etl from Log.cmd, merge them first:\n"
+                                "  run_xperf_cmd  args=\"-merge kernel.etl user.etl merged.etl\""
+                    ))
+
+                # GPU-related ETW provider name substrings used for filtering tracestats output
+                GPU_PROVIDER_KEYWORDS = [
+                    "dxgkrnl", "dxgport", "d3d9", "dxgi", "dx11", "dx12",
+                    "directx", "display", "gpu", "nvidia", "nvlddmkm",
+                    "amd", "amdkmdag", "jm", "mmd", "intel", "igfx",
+                    "present", "flip", "vidmm", "vidsch",
+                ]
+
+                results = []
+                # Header showing file and gpuview location
+                header = f"## GPU ETL Analysis: `{args.etl_path}`\n"
+                if gpuview_path:
+                    header += f"*GPUView directory: `{gpuview_path}`*\n"
+                header += "\n"
+                results.append(header)
+
+                for aspect in args.aspects:
+                    cmd = [xperf_path, "-i", args.etl_path]
+                    if args.output_file and aspect in ("cpusampling", "cswitch"):
+                        cmd += ["-o", args.output_file]
+                    cmd += ["-a", aspect]
+                    try:
+                        proc = _sp.run(cmd, capture_output=True, text=True, timeout=180)
+                        out = proc.stdout or ""
+                        err = proc.stderr or ""
+
+                        # For tracestats: optionally filter to GPU providers only
+                        if aspect == "tracestats" and args.gpu_providers and out:
+                            lines = out.splitlines()
+                            # Keep header lines (non-data) + lines containing GPU keywords
+                            filtered = []
+                            for line in lines:
+                                ll = line.lower()
+                                if not line.strip() or "provider" in ll or "event" in ll or "count" in ll:
+                                    filtered.append(line)
+                                elif any(kw in ll for kw in GPU_PROVIDER_KEYWORDS):
+                                    filtered.append(line)
+                            out = "\n".join(filtered)
+                            if not out.strip():
+                                out = "(No GPU-related provider events found in this trace)\n"
+
+                        section = f"### xperf -a {aspect}\n```\n{out}"
+                        if err:
+                            section += f"\n[stderr]\n{err}"
+                        section += "\n```\n"
+                        if args.output_file and aspect in ("cpusampling", "cswitch"):
+                            section += f"\n*Data written to: {args.output_file}*\n"
+                        results.append(section)
+                    except _sp.TimeoutExpired:
+                        results.append(f"### xperf -a {aspect}\n*Timed out after 180 seconds.*\n")
+                    except Exception as exc:
+                        results.append(f"### xperf -a {aspect}\n*Error: {exc}*\n")
+
+                # Append GPUView tip
+                if gpuview_path:
+                    gpuview_exe = os.path.join(gpuview_path, "GPUView.exe")
+                    results.append(
+                        f"\n---\n**Tip:** For visual GPU frame timeline analysis (GPU queue depth, flip chain, "
+                        f"present latency), open the ETL in GPUView:\n"
+                        f"```\n{gpuview_exe} \"{args.etl_path}\"\n```\n"
+                    )
+
+                return [TextContent(type="text", text="".join(results))]
+
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=f"Unknown tool: {name}"
@@ -1422,6 +1595,10 @@ def _create_server(
                 header_lines.append(f"- **WinDbg/CDB 工具目录:** `{cdb_dir}`")
             if sysinternals_path:
                 header_lines.append(f"- **Sysinternals Suite 目录:** `{sysinternals_path}`")
+            if xperf_path:
+                header_lines.append(f"- **xperf.exe 路径:** `{xperf_path}`")
+            if gpuview_path:
+                header_lines.append(f"- **GPUView 目录:** `{gpuview_path}`")
             if header_lines:
                 header = "## 当前配置的工具路径\n\n" + "\n".join(header_lines) + "\n\n---\n\n"
                 prompt_text = header + prompt_content
